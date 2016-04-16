@@ -23,6 +23,10 @@ class ArgumentsError(Exception):
     pass
 
 
+class DependencyInstallationError(Exception):
+    pass
+
+
 class LambdaDeploy(object):
     DEFAULT_ENV_FILE = '.env'
     DEFAULT_LAMBDA_DIR = os.getcwd()
@@ -102,13 +106,30 @@ class LambdaDeploy(object):
                         '-r',
                         os.path.join(src_dir, 'requirements.txt'),
                         '-t',
-                        temp_dir,
+                        temp_dir
                     ]
 
                     # Do pip install to temporary dir
-                    pip.main(pip_args)
-
-                    self.add_directory_to_zip(temp_dir, zf)
+                    if pip.main(pip_args) == 0:
+                        self.add_directory_to_zip(temp_dir, zf)
+                    else:
+                        if sys.platform == 'darwin':
+                            logger.error(
+                                'A DistutilsOptionError about the prefix '
+                                'can occur when you are on OS X and '
+                                'installed Python via Homebrew.\nIf this '
+                                'is you, please look at https://github.com'
+                                '/Homebrew/brew/blob/master/share/doc/'
+                                'homebrew/Homebrew-and-Python.md'
+                                '#note-on-pip-install---user\n'
+                                'If this is not you, please contact us '
+                                ' for support.'
+                            )
+                        raise DependencyInstallationError(
+                            'Failed to install dependencies of {}'.format(
+                                name
+                            )
+                        )
 
         zfh.seek(0)
 
@@ -322,3 +343,8 @@ def main():
         except (TypeError, ArgumentsError):
             logger.error('Invalid arguments.')
             print_usage(parser)
+        except RuntimeError:
+            logger.error(
+                'Error, quitting. If no reasons was given for this '
+                'error, please contact support.'
+            )
