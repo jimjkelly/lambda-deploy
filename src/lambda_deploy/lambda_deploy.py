@@ -141,10 +141,14 @@ class LambdaDeploy(object):
         if not self.role:
             raise ArgumentsError('Role required')
 
-        lambda_dirs = [
-            l for l in os.listdir(self.lambda_dir)
-            if not lambdas or l in lambdas
-        ]
+        lambda_dirs = filter(
+            lambda dir: (
+                os.path.isdir(dir) and
+                (not lambdas or dir in lambdas) and
+                not dir.startswith('.')
+            ),
+            os.listdir(self.lambda_dir)
+        )
 
         for missing in [m for m in lambdas if m not in lambda_dirs]:
             logger.warn('Lambda {} not found, skipping.'.format(missing))
