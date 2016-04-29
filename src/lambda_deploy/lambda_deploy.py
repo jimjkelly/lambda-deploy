@@ -29,8 +29,8 @@ class DependencyInstallationError(Exception):
 
 class LambdaDeploy(object):
     DEFAULT_ENV_FILE = '.env'
-    DEFAULT_LAMBDA_DIR = os.getcwd()
     ACTIONS = ['deploy', 'list']
+    lambda_dir = os.getcwd()
 
     def __init__(self, lambda_dir=None, env_file=None, env_vars=None,
                  role=None):
@@ -38,10 +38,20 @@ class LambdaDeploy(object):
         if not env_file or env_file == self.DEFAULT_ENV_FILE:
             env_file = os.getenv('LAMBDA_ENV_FILE', '.env')
 
+        env_file = os.path.realpath(env_file)
+        # If they've specified a .env file, let's ensure it's there:
+        if env_file != '.env':
+            if not os.path.exists(env_file):
+                logger.error(
+                    'Can\'t find Lambda env file at {}'.format(env_file)
+                )
+                raise ArgumentsError('Cannot find Env file')
+
+
         yaep.populate_env(env_file)
 
-        if not lambda_dir or lambda_dir == self.DEFAULT_LAMBDA_DIR:
-            lambda_dir = yaep.env('LAMBDA_DIRECTORY', self.DEFAULT_LAMBDA_DIR)
+        if not lambda_dir or lambda_dir == self.lambda_dir:
+            lambda_dir = yaep.env('LAMBDA_DIRECTORY', self.lambda_dir)
 
         if not env_vars:
             # If there were no env_vars passed, look for them
@@ -57,13 +67,20 @@ class LambdaDeploy(object):
 
         self.env_vars = env_vars
         self.lambda_dir = lambda_dir
-        self.client = boto3.client('lambda')
+        self.lambda_name = os.path.basename(os.path.normpath(self.lambda_dir))
         self.role = role if role else yaep.env('LAMBDA_ROLE')
+        self.client = boto3.client('lambda')
 
     def add_directory_to_zip(self, directory, zf):
         for root, dirs, files in os.walk(directory):
             for filename in files:
-                if not filename.endswith('.pyc'):
+                if filename == '.env':
+                    logger.warn(
+                        'Skipping inclusion of of .env file - '
+                        'use LAMBDA_ENV_VARS instead (see '
+                        'documentation for more information)'
+                    )
+                elif not filename.endswith('.pyc'):
                     zf.write(
                         os.path.join(root, filename),
                         os.path.join(
@@ -78,14 +95,20 @@ class LambdaDeploy(object):
     def get_function_names(self):
         return [l.get('FunctionName') for l in self.get_functions()]
 
-    def package(self, name):
+    def package(self):
         """Packages lambda data for deployment into a zip"""
-        logger.info('Packaging lambda {}'.format(name))
-        src_dir = os.path.join(self.lambda_dir, name)
+        logger.info('Packaging lambda {}'.format(self.lambda_name))
         zfh = io.BytesIO()
 
+        if os.path.exists(os.path.join(self.lambda_dir, '.env')):
+            logger.warn(
+                'A .env file exists in your Lambda directory - be '
+                'careful that it does not contain any secrets you '
+                'don\'t want uploaded to AWS!'
+            )
+
         with zipfile.ZipFile(zfh, 'w') as zf:
-            self.add_directory_to_zip(src_dir, zf)
+            self.add_directory_to_zip(self.lambda_dir, zf)
 
             # Construct a .env file in the archive with our
             # needed envrionment variables.
@@ -99,12 +122,12 @@ class LambdaDeploy(object):
                 )
             )
 
-            if 'requirements.txt' in os.listdir(src_dir):
+            if 'requirements.txt' in os.listdir(self.lambda_dir):
                 with TemporaryDirectory() as temp_dir:
                     pip_args = [
                         'install',
                         '-r',
-                        os.path.join(src_dir, 'requirements.txt'),
+                        os.path.join(self.lambda_dir, 'requirements.txt'),
                         '-t',
                         temp_dir
                     ]
@@ -127,7 +150,7 @@ class LambdaDeploy(object):
                             )
                         raise DependencyInstallationError(
                             'Failed to install dependencies of {}'.format(
-                                name
+                                self.lambda_name
                             )
                         )
 
@@ -139,82 +162,70 @@ class LambdaDeploy(object):
         """Deploys lambdas to AWS"""
 
         if not self.role:
+            logger.error('Missing AWS Role')
             raise ArgumentsError('Role required')
 
-        lambda_dirs = filter(
-            lambda dir: (
-                os.path.isdir(dir) and
-                (not lambdas or dir in lambdas) and
-                not dir.startswith('.')
-            ),
-            os.listdir(self.lambda_dir)
-        )
+        logger.debug('Deploying lambda {}'.format(self.lambda_name))
+        zfh = self.package()
 
-        for missing in [m for m in lambdas if m not in lambda_dirs]:
-            logger.warn('Lambda {} not found, skipping.'.format(missing))
+        if self.lambda_name in self.get_function_names():
+            logger.info('Updating {} lambda'.format(self.lambda_name))
 
-        for lambda_name in lambda_dirs:
-            logger.debug('Deploying lambda {}'.format(lambda_name))
-            zfh = self.package(lambda_name)
+            response = self.client.update_function_code(
+                FunctionName=self.lambda_name,
+                ZipFile=zfh.getvalue(),
+                Publish=True
+            )
+        else:
+            logger.info('Adding new {} lambda'.format(self.lambda_name))
 
-            if lambda_name in self.get_function_names():
-                logger.info('Updating {} lambda'.format(lambda_name))
+            response = self.client.create_function(
+                FunctionName=self.lambda_name,
+                Runtime=yaep.env(
+                    'LAMBDA_RUNTIME',
+                    'python2.7'
+                ),
+                Role=self.role,
+                Handler=yaep.env(
+                    'LAMBDA_HANDLER',
+                    'lambda_function.lambda_handler'
+                ),
+                Code={
+                    'ZipFile': zfh.getvalue(),
+                },
+                Description=yaep.env(
+                    'LAMBDA_DESCRIPTION',
+                    'Lambda code for {}'.format(self.lambda_name)
+                ),
+                Timeout=yaep.env(
+                    'LAMBDA_TIMEOUT',
+                    3,
+                    convert_booleans=False,
+                    type_class=int
+                ),
+                MemorySize=yaep.env(
+                    'LAMBDA_MEMORY_SIZE',
+                    128,
+                    convert_booleans=False,
+                    type_class=int
+                ),
+                Publish=True
+            )
 
-                response = self.client.update_function_code(
-                    FunctionName=lambda_name,
-                    ZipFile=zfh.getvalue(),
-                    Publish=True
-                )
-            else:
-                logger.info('Adding new {} lambda'.format(lambda_name))
+        status_code = response.get(
+            'ResponseMetadata', {}
+        ).get('HTTPStatusCode')
 
-                response = self.client.create_function(
-                    FunctionName=lambda_name,
-                    Runtime=yaep.env(
-                        'LAMBDA_RUNTIME',
-                        'python2.7'
-                    ),
-                    Role=self.role,
-                    Handler=yaep.env(
-                        'LAMBDA_HANDLER',
-                        'lambda_function.lambda_handler'
-                    ),
-                    Code={
-                        'ZipFile': zfh.getvalue(),
-                    },
-                    Description=yaep.env(
-                        'LAMBDA_DESCRIPTION',
-                        'Lambda code for {}'.format(lambda_name)
-                    ),
-                    Timeout=yaep.env(
-                        'LAMBDA_TIMEOUT',
-                        3,
-                        convert_booleans=False,
-                        type_class=int
-                    ),
-                    MemorySize=yaep.env(
-                        'LAMBDA_MEMORY_SIZE',
-                        128,
-                        convert_booleans=False,
-                        type_class=int
-                    ),
-                    Publish=True
-                )
-
-            status_code = response.get(
-                'ResponseMetadata', {}
-            ).get('HTTPStatusCode')
-
-            if status_code in [200, 201]:
-                logger.info('Successfully deployed {} version {}'.format(
-                    lambda_name,
-                    response.get('Version', 'Unkown')
-                ))
-            else:
-                logger.error('Error deploying {}: {}'.format(
-                    lambda_name,
-                    response
-                ))
+        if status_code in [200, 201]:
+            logger.info('Successfully deployed {} version {}'.format(
+                self.lambda_name,
+                response.get('Version', 'Unkown')
+            ))
+        else:
+            logger.error('Error deploying {}: {}'.format(
+                self.lambda_name,
+                response
+            ))
 
     def list(self):
         """Lists already deployed lambdas"""
@@ -327,12 +338,18 @@ def main():
     logging.debug('Setting loglevel to DEBUG')
 
     action = args[0] if args else ''
-    method = getattr(LambdaDeploy(
-        lambda_dir=options.directory,
-        env_file=options.env_file,
-        env_vars=options.env_vars,
-        role=options.role
-    ), action, None)
+
+    try:
+        method = getattr(LambdaDeploy(
+            lambda_dir=options.directory,
+            env_file=options.env_file,
+            env_vars=options.env_vars,
+            role=options.role
+        ), action, None)
+    except ArgumentsError:
+        logger.error('Invalid arguments.')
+        print_usage(parser)
+        sys.exit(1)
 
     if not method:
         if action:
@@ -347,8 +364,10 @@ def main():
         except (TypeError, ArgumentsError):
             logger.error('Invalid arguments.')
             print_usage(parser)
+            sys.exit(1)
         except RuntimeError:
             logger.error(
                 'Error, quitting. If no reasons was given for this '
                 'error, please contact support.'
             )
+            sys.exit(1)

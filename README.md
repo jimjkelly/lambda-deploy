@@ -1,5 +1,12 @@
 # Lambda Deploy - Easily Deploy Code to AWS Lambda
 
+_Note: 0.1.0 introduces a change in how Lambda
+Deploy operates - no longer are all directories
+in the current working directory assumed to be
+Lambdas, instead the current directory itself
+is assumed to be a Lambda, and you need to call
+it multiple times to upload multiple Lambdas._
+
 This tool provides an easy way to deploy your code
 to AWS's Lambda service. It provides a number of
 useful features:
@@ -16,10 +23,9 @@ but if you find something, please open an issue.
 
 ## Usage
 
-At its heart the tool simply takes every directory
-it sees in the directory it is run from, and assumes
-it is a lambda. It will package up said directory,
-giving it the name of said directory, and pushing
+At its heart the tool simply takes the directory
+it is run from, and will package it up, giving it
+the name of the directory, and pushing
 it to AWS with the options you configure (see
 [Configuration](#configuration) below).
 
@@ -32,21 +38,16 @@ a ticket.
 
 A simple example usage would be the following:
 
-	$ lambda-deploy deploy foo
-
-Where foo is a directory in the current
-directory. It will ignore all other
-items in the directory. Alternatively,
-
 	$ lambda-deploy deploy
 
-will dumbly upload every directory - so make
-sure this is wanted!
+This will load all the contents of the current
+working directory into a Lambda and upload it
+to AWS.
 
-There is one other command aside from
-`deploy`: `list`. You can guess
-what `list` does - it lists your current Lambdas
-along with some information about them.
+There is one other command aside from `deploy`:
+`list`. You can guess what `list` does - it
+lists your current Lambdas along with some
+information about them.
 
 At its most basic that's it. The next section
 will cover how to configure things.
@@ -165,6 +166,12 @@ environment:
 Note that shell expansions haven't been tested
 here yet.
 
+Note that a `.env` file inside your Lambda
+directory will *not* be uploaded, to protect
+you from accidentally uploading sensitive
+information.  Use `LAMBDA_ENV_VARS` as is
+described below.
+
 #### Environment Variables (LAMBDA\_ENV_VARS)
 
 You can specify one or more environment
@@ -194,7 +201,7 @@ that looks like the following:
 #### Lambda Directory (LAMBDA_DIRECTORY)
 
 By default the tool uses the current working
-directory as its base to search for Lambdas, but you
+directory as its base to package, but you
 can change this by providing this option:
 
 	$ lambda-deploy -d /another/directory
@@ -252,6 +259,34 @@ Lambda.
 
 Feel free to open an issue if you have problems
 getting this to work.
+
+## An Example of Deploying Multiple Lambdas
+
+A common use case is having a stable of Lambdas
+that you would like deployed, perhaps as part of
+a CI solution. An example of this might be
+having a single git repo, in which you have a
+directory called "lambdas" which contains
+directories containing your individual Lambda
+directories, like so:
+
+	$ ls lambdas/
+	lambdaA lambdaB
+
+Assuming your CI solution inserts the current
+git commit SHA1 in an environment variable, lets
+call it `GIT_COMMIT_SHA1`, you could construct
+a command like the following to only release
+the Lambdas that changed:
+
+	$ git show --pretty="format:" --name-only $GIT_COMMIT_SHA1 | grep '^lambdas' | cut -d/ -f 1-2 | uniq | xargs -I {} sh -c 'test -d "{}" && lambda-deploy -d "{}" deploy'
+
+This correctly deals with not acting on things
+outside of your lambdas directory, and only
+uploading a Lambda if it changed. It does not
+remove existing Lambdas if they are removed
+from your git source - that's still something
+you'd need to do manually.
 
 ## Development and Support
 

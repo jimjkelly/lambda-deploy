@@ -1,3 +1,4 @@
+include CONTRIBUTORS.md
 include LICENSE.md
 include README.md
 include HISTORY.md
