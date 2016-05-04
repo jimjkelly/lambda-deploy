@@ -36,19 +36,19 @@ class LambdaDeploy(object):
                  role=None):
 
         if not env_file or env_file == self.DEFAULT_ENV_FILE:
-            env_file = os.getenv('LAMBDA_ENV_FILE', '.env')
-
-        env_file = os.path.realpath(env_file)
-        # If they've specified a .env file, let's ensure it's there:
-        if env_file != '.env':
+            env_file = os.path.realpath(os.getenv('LAMBDA_ENV_FILE', '.env'))
+        else:
+            # If they've specified a .env file, let's ensure it's there:
+            env_file = os.path.realpath(env_file)
             if not os.path.exists(env_file):
                 logger.error(
                     'Can\'t find Lambda env file at {}'.format(env_file)
                 )
                 raise ArgumentsError('Cannot find Env file')
 
-
-        yaep.populate_env(env_file)
+        # Now load the .env file if it exists.
+        if os.path.exists(env_file):
+            yaep.populate_env(env_file)
 
         if not lambda_dir or lambda_dir == self.lambda_dir:
             lambda_dir = yaep.env('LAMBDA_DIRECTORY', self.lambda_dir)
