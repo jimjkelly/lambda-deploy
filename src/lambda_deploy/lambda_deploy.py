@@ -33,7 +33,7 @@ class LambdaDeploy(object):
     lambda_dir = os.getcwd()
 
     def __init__(self, lambda_dir=None, env_file=None, env_vars=None,
-                 role=None):
+                 role=None, name=None):
 
         if not env_file or env_file == self.DEFAULT_ENV_FILE:
             env_file = os.path.realpath(os.getenv('LAMBDA_ENV_FILE', '.env'))
@@ -67,7 +67,10 @@ class LambdaDeploy(object):
 
         self.env_vars = env_vars
         self.lambda_dir = lambda_dir
-        self.lambda_name = os.path.basename(os.path.normpath(self.lambda_dir))
+        self.lambda_name = name if name else yaep.env(
+            'LAMBDA_NAME',
+            os.path.basename(os.path.normpath(self.lambda_dir))
+        )
         self.role = role if role else yaep.env('LAMBDA_ROLE')
         self.client = boto3.client('lambda')
 
@@ -295,6 +298,15 @@ def main():
     )
 
     parser.add_option(
+        '-n', '--name', dest='name',
+        help=(
+            'The name of the Lambda to use on AWS. Defaults to '
+            'the name of the directory. Can be configured via '
+            'environment variable LAMBDA_NAME as well.'
+        )
+    )
+
+    parser.add_option(
         '-l', '--logging-level', dest='logging_level', default='INFO',
         help=(
             'The specific logging level to use. These correspond to '
@@ -344,7 +356,8 @@ def main():
             lambda_dir=options.directory,
             env_file=options.env_file,
             env_vars=options.env_vars,
-            role=options.role
+            role=options.role,
+            name=options.name
         ), action, None)
     except ArgumentsError:
         logger.error('Invalid arguments.')

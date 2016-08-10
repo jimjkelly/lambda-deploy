@@ -118,6 +118,14 @@ Lambda directory you would have a file
 `lambda_function.py` which contains a
 function `lambda_handler`.
 
+#### Name (LAMBDA_NAME)
+
+This is the name attached to your Lambda job
+on AWS. It defaults to the directory name the
+code resides in.  This can be specified via
+the `-n/--name` option on the command line
+or the environment variable.
+
 #### Description (LAMBDA_DESCRIPTION)
 
 This is the description attached to your Lambda
